@@ -9,8 +9,9 @@ import keras.backend as K
 from keras.models import Sequential
 from keras.models import load_model, clone_model
 from keras.layers import Dense
-from keras.optimizers import Adam
-
+# from keras.optimizers import Adam
+# solution with new keras
+from tensorflow.keras.optimizers import Adam
 
 def huber_loss(y_true, y_pred, clip_delta=1.0):
     """Huber loss - Custom Loss Function for Q Learning
