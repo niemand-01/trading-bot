@@ -15,7 +15,7 @@ Options:
   --window-size=<window-size>       Size of the n-day window stock data representation
                                     used as the feature vector. [default: 10]
   --batch-size=<batch-size>         Number of samples to train on in one mini-batch
-                                    during training. [default: 32]
+                                    during training. [default: 128]
   --episode-count=<episode-count>   Number of trading episodes to use for training. [default: 50]
   --model-name=<model-name>         Name of the pretrained model to use. [default: model_debug]
   --pretrained                      Specifies whether to continue training a previously
@@ -53,12 +53,35 @@ def main(train_stock, val_stock, window_size, batch_size, ep_count,
     val_data = get_stock_data(val_stock)
 
     initial_offset = val_data[1] - val_data[0]
+    
+    # Track best validation result to save best model
+    best_val_result = float('-inf')
+    best_episode = 0
 
     for episode in range(1, ep_count + 1):
         train_result = train_model(agent, episode, train_data, ep_count=ep_count,
                                    batch_size=batch_size, window_size=window_size)
         val_result, _ = evaluate_model(agent, val_data, window_size, debug)
         show_train_result(train_result, val_result, initial_offset)
+        
+        # Save model if this is the best validation result so far
+        if val_result > best_val_result:
+            best_val_result = val_result
+            best_episode = episode
+            # Save best model to model folder (overwrites previous best)
+            # The model folder will always contain the best model from this training run
+            agent.save_best()
+            # Also save checkpoint with episode number for reference
+            agent.save(episode)
+            logging.info(f"New best validation result: {format_position(val_result)} at episode {episode}.")
+            logging.info(f"Best model saved to: models/{model_name}/ (overwrites previous best)")
+            logging.info(f"Checkpoint saved to: models/{model_name}_{episode}/")
+    
+    # Log final best model info
+    if best_episode > 0:
+        logging.info(f"Training completed. Best model: episode {best_episode} with validation result: {format_position(best_val_result)}")
+        logging.info(f"Best model location: models/{model_name}/")
+        logging.info(f"Best checkpoint location: models/{model_name}_{best_episode}/")
 
 
 if __name__ == "__main__":
@@ -75,7 +98,7 @@ if __name__ == "__main__":
     debug = args["--debug"]
 
     coloredlogs.install(level="DEBUG")
-    switch_k_backend_device()
+    switch_k_backend_device(use_gpu=True)  # Use GPU by default
 
     try:
         main(train_stock, val_stock, window_size, batch_size,

@@ -54,18 +54,10 @@ def train_model(agent, episode, data, ep_count=100, batch_size=32, window_size=1
 
         state = next_state
 
-    if episode % 10 == 0:
-        agent.save(episode)
+    # Note: Model saving is now handled in train.py based on best validation performance
+    # Removed automatic save every 10 episodes to avoid saving non-optimal models
 
     return (episode, ep_count, total_profit, np.mean(np.array(avg_loss)))
-
-
-
-
-
-
-
-
 
 
 
