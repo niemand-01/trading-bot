@@ -108,3 +108,7 @@ venv.bak/
 
 # poetry stuff
 poetry.lock
+
+evalulation_output/
+
+data/
