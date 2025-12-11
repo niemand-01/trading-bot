@@ -18,33 +18,60 @@ def train_model(agent, episode, data, ep_count=100, batch_size=32, window_size=1
     total_profit = 0
     data_length = len(data) - 1
 
-    agent.inventory = []
+    agent.long_inventory = []
+    agent.short_inventory = []
     avg_loss = []
 
-    state = get_state(data, 0, window_size + 1)
+    # Calculate position state: 1.0 for long, -1.0 for short, 0.0 for flat
+    def get_position_state():
+        if len(agent.long_inventory) > 0:
+            return 1.0
+        elif len(agent.short_inventory) > 0:
+            return -1.0
+        else:
+            return 0.0
+
+    state = get_state(data, 0, window_size + 1, get_position_state())
 
     for t in tqdm(range(data_length), total=data_length, leave=True, desc='Episode {}/{}'.format(episode, ep_count)):        
         reward = 0
-        next_state = get_state(data, t + 1, window_size + 1)
-
+        current_price = data[t]
+        
         # select an action
         action = agent.act(state)
 
-        # BUY
-        if action == 1:
-            agent.inventory.append(data[t])
+        # Position-aware actions:
+        # BUY (action == 1): Open long if flat, close short if short
+        # SELL (action == 2): Close long if long, open short if flat
+        # HOLD (action == 0): Do nothing
 
-        # SELL
-        elif action == 2 and len(agent.inventory) > 0:
-            bought_price = agent.inventory.pop(0)
-            delta = data[t] - bought_price
-            reward = delta #max(delta, 0)
-            total_profit += delta
+        if action == 1:  # BUY
+            if len(agent.short_inventory) > 0:
+                # Close short position (cover short)
+                sold_price = agent.short_inventory.pop(0)
+                delta = sold_price - current_price  # Profit when price goes down
+                reward = delta
+                total_profit += delta
+            else:
+                # Open long position
+                agent.long_inventory.append(current_price)
 
-        # HOLD
-        else:
-            pass
+        elif action == 2:  # SELL
+            if len(agent.long_inventory) > 0:
+                # Close long position
+                bought_price = agent.long_inventory.pop(0)
+                delta = current_price - bought_price  # Profit when price goes up
+                reward = delta
+                total_profit += delta
+            else:
+                # Open short position
+                agent.short_inventory.append(current_price)
 
+        # HOLD (action == 0): Do nothing, reward remains 0
+
+        # Calculate next state with updated position
+        next_state = get_state(data, t + 1, window_size + 1, get_position_state())
+        
         done = (t == data_length - 1)
         agent.remember(state, action, reward, next_state, done)
 
@@ -66,40 +93,76 @@ def evaluate_model(agent, data, window_size, debug):
     data_length = len(data) - 1
 
     history = []
-    agent.inventory = []
+    agent.long_inventory = []
+    agent.short_inventory = []
     
-    state = get_state(data, 0, window_size + 1)
+    # Calculate position state: 1.0 for long, -1.0 for short, 0.0 for flat
+    def get_position_state():
+        if len(agent.long_inventory) > 0:
+            return 1.0
+        elif len(agent.short_inventory) > 0:
+            return -1.0
+        else:
+            return 0.0
+
+    state = get_state(data, 0, window_size + 1, get_position_state())
 
     for t in range(data_length):        
         reward = 0
-        next_state = get_state(data, t + 1, window_size + 1)
+        current_price = data[t]
         
         # select an action
         action = agent.act(state, is_eval=True)
 
-        # BUY
-        if action == 1:
-            agent.inventory.append(data[t])
+        # Position-aware actions (same as training):
+        # BUY (action == 1): Open long if flat, close short if short
+        # SELL (action == 2): Close long if long, open short if flat
+        # HOLD (action == 0): Do nothing
 
-            history.append((data[t], "BUY"))
-            if debug:
-                logging.debug("Buy at: {}".format(format_currency(data[t])))
+        if action == 1:  # BUY
+            if len(agent.short_inventory) > 0:
+                # Close short position (cover short)
+                sold_price = agent.short_inventory.pop(0)
+                delta = sold_price - current_price
+                reward = delta
+                total_profit += delta
+
+                history.append((current_price, "COVER_SHORT"))
+                if debug:
+                    logging.debug("Cover short at: {} | Position: {}".format(
+                        format_currency(current_price), format_position(delta)))
+            else:
+                # Open long position
+                agent.long_inventory.append(current_price)
+                history.append((current_price, "BUY"))
+                if debug:
+                    logging.debug("Buy at: {}".format(format_currency(current_price)))
         
-        # SELL
-        elif action == 2 and len(agent.inventory) > 0:
-            bought_price = agent.inventory.pop(0)
-            delta = data[t] - bought_price
-            reward = delta #max(delta, 0)
-            total_profit += delta
+        elif action == 2:  # SELL
+            if len(agent.long_inventory) > 0:
+                # Close long position
+                bought_price = agent.long_inventory.pop(0)
+                delta = current_price - bought_price
+                reward = delta
+                total_profit += delta
 
-            history.append((data[t], "SELL"))
-            if debug:
-                logging.debug("Sell at: {} | Position: {}".format(
-                    format_currency(data[t]), format_position(data[t] - bought_price)))
-        # HOLD
-        else:
-            history.append((data[t], "HOLD"))
+                history.append((current_price, "SELL"))
+                if debug:
+                    logging.debug("Sell at: {} | Position: {}".format(
+                        format_currency(current_price), format_position(delta)))
+            else:
+                # Open short position
+                agent.short_inventory.append(current_price)
+                history.append((current_price, "SHORT_SELL"))
+                if debug:
+                    logging.debug("Short sell at: {}".format(format_currency(current_price)))
+        
+        else:  # HOLD
+            history.append((current_price, "HOLD"))
 
+        # Calculate next state with updated position
+        next_state = get_state(data, t + 1, window_size + 1, get_position_state())
+        
         done = (t == data_length - 1)
         agent.memory.append((state, action, reward, next_state, done))
 

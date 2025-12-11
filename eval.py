@@ -81,15 +81,14 @@ def get_ohlcv_data(stock_file, start_date=None, end_date=None):
 
 
 def calculate_portfolio_nav(data, history, initial_capital=None):
-    """Calculate portfolio NAV over time from trading history
+    """Calculate portfolio NAV over time from trading history with short selling support
 
     This matches the profit calculation in evaluate_model:
-    - BUY: Add to inventory (no cash constraint in original)
-    - SELL: Remove from inventory, calculate profit as (sell_price - buy_price)
+    - BUY: Open long if flat, close short if short
+    - SELL: Close long if long, open short if flat
+    - SHORT_SELL: Open short position
+    - COVER_SHORT: Close short position
     - NAV = initial_capital + cumulative_realized_profit + unrealized_profit
-
-    The key insight: evaluate_model doesn't track cash, it just tracks profit.
-    So NAV = initial + all realized profits + unrealized profits on held inventory.
 
     Note: For realistic returns calculation, use a fixed initial capital (e.g., $100,000)
     instead of the first stock price to avoid inflated percentage returns.
@@ -101,7 +100,8 @@ def calculate_portfolio_nav(data, history, initial_capital=None):
 
     nav_history = [initial_capital]
     cumulative_realized_profit = 0.0
-    inventory = []  # Store buy prices (FIFO)
+    long_inventory = []  # Store long buy prices (FIFO)
+    short_inventory = []  # Store short sell prices (FIFO)
 
     # Get price data as list for compatibility
     prices = data["Adj Close"].values
@@ -111,23 +111,40 @@ def calculate_portfolio_nav(data, history, initial_capital=None):
         if i >= len(prices):
             break
 
+        current_price = prices[i] if i < len(prices) else prices[-1]
+
         if action == "BUY":
-            # In evaluate_model, BUY just adds to inventory without cash check
-            inventory.append(price)
-        elif action == "SELL" and len(inventory) > 0:
-            # In evaluate_model, SELL calculates profit as (sell_price - buy_price)
-            bought_price = inventory.pop(0)
+            # Open long position
+            long_inventory.append(price)
+        elif action == "SELL" and len(long_inventory) > 0:
+            # Close long position
+            bought_price = long_inventory.pop(0)
             profit = price - bought_price
+            cumulative_realized_profit += profit
+        elif action == "SHORT_SELL":
+            # Open short position
+            short_inventory.append(price)
+        elif action == "COVER_SHORT" and len(short_inventory) > 0:
+            # Close short position
+            sold_price = short_inventory.pop(0)
+            profit = sold_price - price  # Profit when price goes down
             cumulative_realized_profit += profit
 
         # Calculate current NAV: initial_capital + realized_profit + unrealized_profit
-        # Unrealized profit = sum of (current_price - buy_price) for all held shares
-        current_price = prices[i] if i < len(prices) else prices[-1]
-        unrealized_profit = (
-            sum(current_price - buy_price for buy_price in inventory)
-            if inventory
+        # Unrealized profit for longs = sum of (current_price - buy_price)
+        # Unrealized profit for shorts = sum of (sell_price - current_price)
+        unrealized_profit_long = (
+            sum(current_price - buy_price for buy_price in long_inventory)
+            if long_inventory
             else 0.0
         )
+        unrealized_profit_short = (
+            sum(sell_price - current_price for sell_price in short_inventory)
+            if short_inventory
+            else 0.0
+        )
+        unrealized_profit = unrealized_profit_long + unrealized_profit_short
+
         # NAV = initial + realized profit + unrealized profit
         current_nav = initial_capital + cumulative_realized_profit + unrealized_profit
         nav_history.append(current_nav)
@@ -136,9 +153,10 @@ def calculate_portfolio_nav(data, history, initial_capital=None):
 
 
 def get_complete_trades(history, data):
-    """Extract complete trades (entry/exit pairs) from history"""
+    """Extract complete trades (entry/exit pairs) from history with short selling support"""
     trades = []
-    inventory = []
+    long_inventory = []  # Track long positions
+    short_inventory = []  # Track short positions
     trade_id = 1
 
     prices = data["Adj Close"].values
@@ -150,48 +168,121 @@ def get_complete_trades(history, data):
             break
 
         if action == "BUY":
-            inventory.append(
-                {"entry_price": price, "entry_date": dates[i], "entry_index": i}
+            # Open long position
+            long_inventory.append(
+                {
+                    "entry_price": price,
+                    "entry_date": dates[i],
+                    "entry_index": i,
+                    "type": "LONG",
+                }
             )
-        elif action == "SELL" and len(inventory) > 0:
-            entry = inventory.pop(0)
-            exit_price = price
-            exit_date = dates[i]
+        elif action == "SELL":
+            if len(long_inventory) > 0:
+                # Close long position
+                entry = long_inventory.pop(0)
+                exit_price = price
+                exit_date = dates[i]
 
-            gross_pnl = exit_price - entry["entry_price"]
-            return_pct = (
-                (gross_pnl / entry["entry_price"]) * 100
-                if entry["entry_price"] > 0
-                else 0
-            )
-
-            # Calculate duration
-            if isinstance(exit_date, pd.Timestamp) and isinstance(
-                entry["entry_date"], pd.Timestamp
-            ):
-                duration_days = (exit_date - entry["entry_date"]).days
-            else:
-                duration_days = (
-                    exit_date - entry["entry_date"]
-                    if hasattr(exit_date - entry["entry_date"], "days")
+                gross_pnl = exit_price - entry["entry_price"]
+                return_pct = (
+                    (gross_pnl / entry["entry_price"]) * 100
+                    if entry["entry_price"] > 0
                     else 0
                 )
 
-            trades.append(
+                # Calculate duration
+                if isinstance(exit_date, pd.Timestamp) and isinstance(
+                    entry["entry_date"], pd.Timestamp
+                ):
+                    duration_days = (exit_date - entry["entry_date"]).days
+                else:
+                    duration_days = (
+                        exit_date - entry["entry_date"]
+                        if hasattr(exit_date - entry["entry_date"], "days")
+                        else 0
+                    )
+
+                trades.append(
+                    {
+                        "trade_id": trade_id,
+                        "entry_date": entry["entry_date"],
+                        "exit_date": exit_date,
+                        "entry_price": entry["entry_price"],
+                        "exit_price": exit_price,
+                        "quantity": 1.0,
+                        "gross_pnl": gross_pnl,
+                        "return_pct": return_pct,
+                        "duration_days": duration_days,
+                        "is_winning": gross_pnl > 0,
+                        "trade_type": "LONG",
+                    }
+                )
+                trade_id += 1
+            else:
+                # Open short position
+                short_inventory.append(
+                    {
+                        "entry_price": price,
+                        "entry_date": dates[i],
+                        "entry_index": i,
+                        "type": "SHORT",
+                    }
+                )
+        elif action == "SHORT_SELL":
+            # Open short position
+            short_inventory.append(
                 {
-                    "trade_id": trade_id,
-                    "entry_date": entry["entry_date"],
-                    "exit_date": exit_date,
-                    "entry_price": entry["entry_price"],
-                    "exit_price": exit_price,
-                    "quantity": 1.0,
-                    "gross_pnl": gross_pnl,
-                    "return_pct": return_pct,
-                    "duration_days": duration_days,
-                    "is_winning": gross_pnl > 0,
+                    "entry_price": price,
+                    "entry_date": dates[i],
+                    "entry_index": i,
+                    "type": "SHORT",
                 }
             )
-            trade_id += 1
+        elif action == "COVER_SHORT":
+            if len(short_inventory) > 0:
+                # Close short position
+                entry = short_inventory.pop(0)
+                exit_price = price
+                exit_date = dates[i]
+
+                gross_pnl = (
+                    entry["entry_price"] - exit_price
+                )  # Profit when price goes down
+                return_pct = (
+                    (gross_pnl / entry["entry_price"]) * 100
+                    if entry["entry_price"] > 0
+                    else 0
+                )
+
+                # Calculate duration
+                if isinstance(exit_date, pd.Timestamp) and isinstance(
+                    entry["entry_date"], pd.Timestamp
+                ):
+                    duration_days = (exit_date - entry["entry_date"]).days
+                else:
+                    duration_days = (
+                        exit_date - entry["entry_date"]
+                        if hasattr(exit_date - entry["entry_date"], "days")
+                        else 0
+                    )
+
+                trades.append(
+                    {
+                        "trade_id": trade_id,
+                        "entry_date": entry["entry_date"],
+                        "exit_date": exit_date,
+                        "entry_price": entry["entry_price"],
+                        "exit_price": exit_price,
+                        "quantity": 1.0,
+                        "gross_pnl": gross_pnl,
+                        "return_pct": return_pct,
+                        "duration_days": duration_days,
+                        "is_winning": gross_pnl > 0,
+                        "trade_type": "SHORT",
+                    }
+                )
+                trade_id += 1
 
     return pd.DataFrame(trades)
 
@@ -342,9 +433,11 @@ def export_trades_candle_chart(
     # Get complete trades
     trades_df = get_complete_trades(history, data)
 
-    # Extract buy/sell points from history
+    # Extract buy/sell points from history (including short positions)
     buy_points = []
     sell_points = []
+    short_sell_points = []
+    cover_short_points = []
 
     prices = data["Adj Close"].values
     dates = data.index
@@ -355,7 +448,13 @@ def export_trades_candle_chart(
         if action == "BUY":
             buy_points.append({"date": dates[i], "price": price})
         elif action == "SELL":
+            # Check if this is closing a long or opening a short
+            # We'll determine this from the trades_df
             sell_points.append({"date": dates[i], "price": price})
+        elif action == "SHORT_SELL":
+            short_sell_points.append({"date": dates[i], "price": price})
+        elif action == "COVER_SHORT":
+            cover_short_points.append({"date": dates[i], "price": price})
 
     # Create subplots: Price with trades, Volume
     fig = make_subplots(
@@ -408,7 +507,7 @@ def export_trades_candle_chart(
             col=1,
         )
 
-    # Add sell markers
+    # Add sell markers (closing long positions)
     if sell_points:
         sell_dates = [p["date"] for p in sell_points]
         sell_prices = [p["price"] for p in sell_points]
@@ -426,25 +525,83 @@ def export_trades_candle_chart(
                 text=["SELL"] * len(sell_points),
                 textposition="bottom center",
                 textfont=dict(color="darkred", size=10, family="Arial Black"),
-                name="Sell",
+                name="Sell (Close Long)",
                 hovertemplate="<b>Sell</b><br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-    # Add trade lines (entry to exit)
+    # Add short sell markers
+    if short_sell_points:
+        short_dates = [p["date"] for p in short_sell_points]
+        short_prices = [p["price"] for p in short_sell_points]
+        fig.add_trace(
+            go.Scatter(
+                x=short_dates,
+                y=short_prices,
+                mode="markers+text",
+                marker=dict(
+                    symbol="square",
+                    size=12,
+                    color="#ff8800",
+                    line=dict(width=2, color="darkorange"),
+                ),
+                text=["SHORT"] * len(short_sell_points),
+                textposition="top center",
+                textfont=dict(color="darkorange", size=10, family="Arial Black"),
+                name="Short Sell",
+                hovertemplate="<b>Short Sell</b><br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Add cover short markers
+    if cover_short_points:
+        cover_dates = [p["date"] for p in cover_short_points]
+        cover_prices = [p["price"] for p in cover_short_points]
+        fig.add_trace(
+            go.Scatter(
+                x=cover_dates,
+                y=cover_prices,
+                mode="markers+text",
+                marker=dict(
+                    symbol="diamond",
+                    size=12,
+                    color="#8800ff",
+                    line=dict(width=2, color="purple"),
+                ),
+                text=["COVER"] * len(cover_short_points),
+                textposition="bottom center",
+                textfont=dict(color="purple", size=10, family="Arial Black"),
+                name="Cover Short",
+                hovertemplate="<b>Cover Short</b><br>Date: %{x}<br>Price: $%{y:.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Add trade lines (entry to exit) with different colors for long vs short
     if len(trades_df) > 0:
         for _, trade in trades_df.iterrows():
+            trade_type = trade.get("trade_type", "LONG")
+            if trade_type == "SHORT":
+                # Short trades: green when winning (price goes down), red when losing
+                line_color = "#2e7d32" if trade["is_winning"] else "#c62828"
+            else:
+                # Long trades: green when winning (price goes up), red when losing
+                line_color = "#2e7d32" if trade["is_winning"] else "#c62828"
+
             fig.add_trace(
                 go.Scatter(
                     x=[trade["entry_date"], trade["exit_date"]],
                     y=[trade["entry_price"], trade["exit_price"]],
                     mode="lines",
                     line=dict(
-                        color="#2e7d32" if trade["is_winning"] else "#c62828",
+                        color=line_color,
                         width=2,
-                        dash="dash",
+                        dash="dash" if trade_type == "SHORT" else "solid",
                     ),
                     showlegend=False,
                     hoverinfo="skip",
@@ -687,6 +844,7 @@ def export_trades_html(
                     <th>Exit Date</th>
                     <th>Entry Price</th>
                     <th>Exit Price</th>
+                    <th>Type</th>
                     <th>Gross P&L</th>
                     <th>Return %</th>
                     <th>Duration (Days)</th>
@@ -699,6 +857,7 @@ def export_trades_html(
     # Add trade rows
     for _, trade in trades_display.iterrows():
         result_class = "winning" if trade["is_winning"] else "losing"
+        trade_type = trade.get("trade_type", "LONG")
         html_content += f"""
                 <tr>
                     <td>{int(trade['trade_id'])}</td>
@@ -706,6 +865,7 @@ def export_trades_html(
                     <td>{trade['exit_date']}</td>
                     <td>${trade['entry_price']:.2f}</td>
                     <td>${trade['exit_price']:.2f}</td>
+                    <td><strong>{trade_type}</strong></td>
                     <td class="{result_class}">${trade['gross_pnl']:.2f}</td>
                     <td class="{result_class}">{trade['return_pct']:.2f}%</td>
                     <td>{trade['duration_days']:.1f}</td>

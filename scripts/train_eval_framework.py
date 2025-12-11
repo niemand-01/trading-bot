@@ -7,6 +7,16 @@ This script orchestrates the training and evaluation process for multiple symbol
 - Tests using 2025 data
 - Organizes models and evaluation results by symbol
 
+Features:
+- Supports both long and short positions (short selling enabled)
+- Position-aware actions: BUY/SELL adapt based on current position
+- Symmetric reward function for both long and short trades
+- Enhanced state representation includes position information
+
+Note: The agent's state size is automatically set to (window_size + 1) to include
+position state information. Existing models trained without short selling support
+will need to be retrained.
+
 Usage:
     python scripts/train_eval_framework.py [--symbols SYMBOL1 SYMBOL2 ...] [--window-size SIZE] 
         [--batch-size SIZE] [--episode-count COUNT] [--strategy STRATEGY] [--debug]
@@ -14,6 +24,7 @@ Usage:
 Options:
     --symbols SYMBOL1 SYMBOL2 ...  List of symbols to process (default: AAPL GOOGL)
     --window-size SIZE             Window size for feature vector [default: 10]
+                                    Note: Actual state size is (window_size + 1) to include position
     --batch-size SIZE              Batch size for training [default: 128]
     --episode-count COUNT          Number of training episodes [default: 50]
     --strategy STRATEGY            Q-learning strategy (dqn, t-dqn, double-dqn) [default: t-dqn]
@@ -125,11 +136,16 @@ def train_model_direct(symbol, train_data, val_data, window_size, batch_size, ep
                        strategy, model_name, debug=False):
     """Train a model directly using imported functions
     
+    The model will be trained with short selling support:
+    - Position-aware actions (BUY/SELL adapt based on current position)
+    - Symmetric rewards for both long and short positions
+    - State includes position information (state_size = window_size + 1)
+    
     Args:
         symbol: Symbol name
         train_data: List of training prices
         val_data: List of validation prices
-        window_size: Window size
+        window_size: Window size (actual state size will be window_size + 1)
         batch_size: Batch size
         episode_count: Number of episodes
         strategy: Training strategy
@@ -139,7 +155,7 @@ def train_model_direct(symbol, train_data, val_data, window_size, batch_size, ep
     Returns:
         success: bool indicating if training succeeded
     """
-    logging.info(f"Training {symbol} model...")
+    logging.info(f"Training {symbol} model with short selling support...")
     
     try:
         agent = Agent(window_size, strategy=strategy, pretrained=False, model_name=model_name)
@@ -186,10 +202,15 @@ def evaluate_model_direct(symbol, original_data_file, window_size, model_name, d
                           start_date=None, end_date=None):
     """Evaluate a model directly using imported functions
     
+    Evaluation includes:
+    - NAV calculation with both long and short positions
+    - Trade tracking distinguishing LONG vs SHORT trades
+    - Visualizations showing short positions (orange squares, purple diamonds)
+    
     Args:
         symbol: Symbol name
         original_data_file: Path to original CSV file with full OHLCV data
-        window_size: Window size
+        window_size: Window size (must match training window_size)
         model_name: Model name
         debug: Enable debug logging
         start_date: Start date for evaluation (YYYY-MM-DD)
@@ -198,7 +219,7 @@ def evaluate_model_direct(symbol, original_data_file, window_size, model_name, d
     Returns:
         success: bool indicating if evaluation succeeded
     """
-    logging.info(f"Evaluating {symbol} model on test data...")
+    logging.info(f"Evaluating {symbol} model on test data (with short selling support)...")
     
     try:
         # Get full OHLCV data first (with date filtering if specified)
@@ -485,8 +506,21 @@ def process_symbol(symbol, data_dir, window_size, batch_size, episode_count,
 
 
 def main(symbols, window_size, batch_size, episode_count, strategy, debug=False):
-    """Main function to process all symbols"""
+    """Main function to process all symbols
+    
+    Note: Models trained with this framework support short selling:
+    - Actions are position-aware (BUY/SELL adapt to current position)
+    - State size is (window_size + 1) to include position information
+    - Rewards are symmetric for both long and short positions
+    """
     setup_logging(debug)
+    
+    # Log short selling support
+    logging.info("=" * 80)
+    logging.info("DQN Trading Bot - Training & Evaluation Framework")
+    logging.info("Short Selling Support: ENABLED")
+    logging.info(f"State Size: {window_size} (price features) + 1 (position state) = {window_size + 1}")
+    logging.info("=" * 80)
     
     data_dir = Path(__file__).parent.parent / "data" / "ib"
     

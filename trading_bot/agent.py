@@ -42,10 +42,11 @@ class Agent:
         self.strategy = strategy
 
         # agent config
-        self.state_size = state_size  # normalized previous days
-        self.action_size = 3  # [sit, buy, sell]
+        self.state_size = state_size + 1  # normalized previous days + position state
+        self.action_size = 3  # [hold, buy, sell] - position-aware actions
         self.model_name = model_name
-        self.inventory = []
+        self.long_inventory = []  # Track long positions (FIFO)
+        self.short_inventory = []  # Track short positions (FIFO)
         self.memory = deque(maxlen=10000)
         self.first_iter = True
 
@@ -104,7 +105,7 @@ class Agent:
 
         if self.first_iter:
             self.first_iter = False
-            return 1  # make a definite buy on the first iter
+            return 1  # make a definite buy on the first iter (open long position)
 
         action_probs = self.model.predict(state, verbose=0)
         return np.argmax(action_probs[0])

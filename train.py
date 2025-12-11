@@ -35,35 +35,51 @@ from trading_bot.utils import (
     format_currency,
     format_position,
     show_train_result,
-    switch_k_backend_device
+    switch_k_backend_device,
 )
 
 
-def main(train_stock, val_stock, window_size, batch_size, ep_count,
-         strategy="t-dqn", model_name="model_debug", pretrained=False,
-         debug=False):
-    """ Trains the stock trading bot using Deep Q-Learning.
+def main(
+    train_stock,
+    val_stock,
+    window_size,
+    batch_size,
+    ep_count,
+    strategy="t-dqn",
+    model_name="model_debug",
+    pretrained=False,
+    debug=False,
+):
+    """Trains the stock trading bot using Deep Q-Learning.
     Please see https://arxiv.org/abs/1312.5602 for more details.
 
     Args: [python train.py --help]
     """
-    agent = Agent(window_size, strategy=strategy, pretrained=pretrained, model_name=model_name)
-    
+    agent = Agent(
+        window_size, strategy=strategy, pretrained=pretrained, model_name=model_name
+    )
+
     train_data = get_stock_data(train_stock)
     val_data = get_stock_data(val_stock)
 
     initial_offset = val_data[1] - val_data[0]
-    
+
     # Track best validation result to save best model
-    best_val_result = float('-inf')
+    best_val_result = float("-inf")
     best_episode = 0
 
     for episode in range(1, ep_count + 1):
-        train_result = train_model(agent, episode, train_data, ep_count=ep_count,
-                                   batch_size=batch_size, window_size=window_size)
+        train_result = train_model(
+            agent,
+            episode,
+            train_data,
+            ep_count=ep_count,
+            batch_size=batch_size,
+            window_size=window_size,
+        )
         val_result, _ = evaluate_model(agent, val_data, window_size, debug)
         show_train_result(train_result, val_result, initial_offset)
-        
+
         # Save model if this is the best validation result so far
         if val_result > best_val_result:
             best_val_result = val_result
@@ -73,13 +89,19 @@ def main(train_stock, val_stock, window_size, batch_size, ep_count,
             agent.save_best()
             # Also save checkpoint with episode number for reference
             agent.save(episode)
-            logging.info(f"New best validation result: {format_position(val_result)} at episode {episode}.")
-            logging.info(f"Best model saved to: models/{model_name}/ (overwrites previous best)")
+            logging.info(
+                f"New best validation result: {format_position(val_result)} at episode {episode}."
+            )
+            logging.info(
+                f"Best model saved to: models/{model_name}/ (overwrites previous best)"
+            )
             logging.info(f"Checkpoint saved to: models/{model_name}_{episode}/")
-    
+
     # Log final best model info
     if best_episode > 0:
-        logging.info(f"Training completed. Best model: episode {best_episode} with validation result: {format_position(best_val_result)}")
+        logging.info(
+            f"Training completed. Best model: episode {best_episode} with validation result: {format_position(best_val_result)}"
+        )
         logging.info(f"Best model location: models/{model_name}/")
         logging.info(f"Best checkpoint location: models/{model_name}_{best_episode}/")
 
@@ -101,8 +123,16 @@ if __name__ == "__main__":
     switch_k_backend_device(use_gpu=True)  # Use GPU by default
 
     try:
-        main(train_stock, val_stock, window_size, batch_size,
-             ep_count, strategy=strategy, model_name=model_name, 
-             pretrained=pretrained, debug=debug)
+        main(
+            train_stock,
+            val_stock,
+            window_size,
+            batch_size,
+            ep_count,
+            strategy=strategy,
+            model_name=model_name,
+            pretrained=pretrained,
+            debug=debug,
+        )
     except KeyboardInterrupt:
         print("Aborted!")
