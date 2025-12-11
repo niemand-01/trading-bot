@@ -90,9 +90,14 @@ def calculate_portfolio_nav(data, history, initial_capital=None):
 
     The key insight: evaluate_model doesn't track cash, it just tracks profit.
     So NAV = initial + all realized profits + unrealized profits on held inventory.
+
+    Note: For realistic returns calculation, use a fixed initial capital (e.g., $100,000)
+    instead of the first stock price to avoid inflated percentage returns.
     """
     if initial_capital is None:
-        initial_capital = data["Adj Close"].iloc[0]
+        # Use fixed initial capital for consistent evaluation
+        # This prevents unrealistic returns when using first stock price
+        initial_capital = 100000.0
 
     nav_history = [initial_capital]
     cumulative_realized_profit = 0.0

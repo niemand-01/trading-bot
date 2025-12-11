@@ -93,15 +93,19 @@ def switch_k_backend_device(use_gpu=True):
                     for gpu in gpus:
                         tf.config.experimental.set_memory_growth(gpu, True)
 
-                    # Optimize GPU performance
-                    tf.config.optimizer.set_jit(
-                        True
-                    )  # Enable XLA JIT compilation for faster execution
-
+                    # Disable XLA JIT by default to avoid libdevice errors
+                    # XLA requires CUDA libdevice which may not be available in all setups
+                    # Users can enable it manually if they have proper CUDA setup
+                    tf.config.optimizer.set_jit(False)
+                    
+                    # Also disable XLA via environment variable as a fallback
+                    os.environ['TF_XLA_FLAGS'] = '--tf_xla_cpu_global_jit=false'
+                    
                     logging.info(f"Using GPU: {[gpu.name for gpu in gpus]}")
-                    logging.info("GPU optimizations enabled: memory growth, XLA JIT")
+                    logging.info("GPU optimizations enabled: memory growth (XLA JIT disabled to avoid libdevice errors)")
                 except RuntimeError as e:
                     logging.warning(f"GPU configuration error: {e}")
+                    logging.info("Falling back to CPU")
             else:
                 # Try to provide helpful debugging info
                 logging.warning("No GPU devices found. Checking CUDA availability...")
